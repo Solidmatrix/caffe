@@ -34,6 +34,12 @@
 #include "caffe/layers/python_layer.hpp"
 #endif
 
+// for int8
+#include "caffe/layers/quantize_conv_layer.hpp"
+#ifdef USE_CUDNN
+#include "caffe/layers/quantize_cudnn_conv_layer.hpp"
+#endif
+
 namespace caffe {
 
 // Get convolution layer according to engine.
@@ -75,6 +81,48 @@ shared_ptr<Layer<Dtype> > GetConvolutionLayer(
 }
 
 REGISTER_LAYER_CREATOR(Convolution, GetConvolutionLayer);
+
+
+// for int8
+// Get quantize convolution layer according to engine.
+template <typename Dtype>
+shared_ptr<Layer<Dtype> > GetQuantizeConvolutionLayer(
+    const LayerParameter& param) {
+  QuantizeConvolutionParameter quantize_conv_param = param.quantize_convolution_param();
+  QuantizeConvolutionParameter_Engine engine = quantize_conv_param.engine();
+#ifdef USE_CUDNN
+  bool use_dilation = false;
+  for (int i = 0; i < quantize_conv_param.dilation_size(); ++i) {
+    if (quantize_conv_param.dilation(i) > 1) {
+      use_dilation = true;
+    }
+  }
+#endif
+  if (engine == QuantizeConvolutionParameter_Engine_DEFAULT) {
+    engine = QuantizeConvolutionParameter_Engine_CAFFE;
+#ifdef USE_CUDNN
+    if (!use_dilation) {
+      engine = QuantizeConvolutionParameter_Engine_CUDNN;
+    }
+#endif
+  }
+  if (engine == QuantizeConvolutionParameter_Engine_CAFFE) {
+    return shared_ptr<Layer<Dtype> >(new QuantizeConvolutionLayer<Dtype>(param));
+#ifdef USE_CUDNN
+  } else if (engine == QuantizeConvolutionParameter_Engine_CUDNN) {
+    if (use_dilation) {
+      LOG(FATAL) << "CuDNN doesn't support the dilated quantize convolution at Layer "
+                 << param.name();
+    }
+    return shared_ptr<Layer<Dtype> >(new QuantizeCuDNNConvolutionLayer<Dtype>(param));
+#endif
+  } else {
+    LOG(FATAL) << "Layer " << param.name() << " has unknown engine.";
+    throw;  // Avoids missing return warning
+  }
+}
+REGISTER_LAYER_CREATOR(QuantizeConvolution, GetQuantizeConvolutionLayer);
+
 
 // Get deconvolution layer according to engine.
 template <typename Dtype>
